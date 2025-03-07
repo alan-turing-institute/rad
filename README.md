@@ -1,2 +1,3 @@
 # rad
-Automatic differentiation in Racket
+
+Teaching myself automatic differentiation in Racket
