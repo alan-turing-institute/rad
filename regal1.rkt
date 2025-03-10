@@ -4,6 +4,9 @@
          racket/string
          racket/dict)
 
+;; TODO:
+;; - Remove sub and div, replace with neg and inv
+
 #|
 
 Implementation of an AD system for the following (minimal) language:
@@ -13,9 +16,9 @@ Implementation of an AD system for the following (minimal) language:
 <prim> ::= add | sub | neg | mul | div | exp
 
 <expr> ::= <num>
-         | <var>
-         | (<prim> <expr> ...)
-         | (let (<var> <expr>) <expr>)
+| <var>
+| (<prim> <expr> ...)
+| (let (<var> <expr>) <expr>)
 |#
 
 
@@ -74,11 +77,26 @@ Implementation of an AD system for the following (minimal) language:
      (let ([dps (apply (dict-ref derivs p) args)]
            [dargs (map (λ (e) (deriv e var derivs)) args)])
        (sumEs (map mulE dps dargs)))]
-    [(Let v E1 E2)
-     (raise-user-error "Let not implemented")]))
+    [(Let v E F)
+     (if (equal? v var)
+         (let ([newv (newsym)])
+           (deriv (Let newv E (rename-in F v newv)) var derivs))
+         ;; (let ([dFv (newsym)])
+         ;; (Let v E
+         ;;      (Let dFv (deriv F v derivs)
+         ;;           (sumE (deriv F var derivs)
+         ;;                 (mulE (Var dFv) (deriv E var derivs))))))
+         (Let v E
+              (sumE (deriv F var derivs)
+                    (mulE (deriv F v derivs) (deriv E var derivs))))
+
+         )]))
 
 (define (mulE e1 e2)
   (App 'mul (list e1 e2)))
+
+(define (sumE e1 e2)
+  (App 'add (list e1 e2)))
 
 (define (reduce proc xs)
   (cond 
@@ -87,7 +105,7 @@ Implementation of an AD system for the following (minimal) language:
     [(proc (car xs) (reduce proc (cdr xs)))]))
 
 (define (sumEs es)
-  (reduce (λ (x y) (App 'add (list x y))) es))
+  (reduce (λ (x y) (sumE x y)) es))
 
 (define newsym
   (let ([n 0])
@@ -97,7 +115,9 @@ Implementation of an AD system for the following (minimal) language:
         (string->symbol
          (string-append "$" (number->string n)))))))
 
-(define (rename-var expr from to)
+;; Rename free occurences of `from` in `expr`
+;; Leave bound occurences alone 
+(define (rename-in expr from to)
   (match expr
     [(Num _)
      expr]
@@ -106,12 +126,20 @@ Implementation of an AD system for the following (minimal) language:
          (Var to)
          expr)]
     [(App p args)
-     (App p (map (λ (e) (rename-var e from to)) args))]
-    [(Let w E F)
-     (if (equal? w from)
-         ) ()]
-    [_ expr])
-  )
+     (App p (map (λ (e) (rename-in e from to)) args))]
+    [(Let v E F)
+     (let ([newE (rename-in E from to)])
+       (cond
+         [(equal? v from) ; `from` is bound in F (but not in E)
+          (Let v newE F)]
+         [(equal? v to)   ; renaming should not affect v, so need to rename `from` first
+          (let ([freshv (newsym)])
+            (Let freshv
+                 newE
+                 (rename-in (rename-in F v freshv) from to)))]
+         [else
+          (Let v newE (rename-in F from to))]))]
+    [_ expr]))
 
 
 ;; Libraries of primitive functions
@@ -165,8 +193,11 @@ Implementation of an AD system for the following (minimal) language:
       [(Let v E1 E2)
        (let ([e1 (optim E1 env)])
          (if (Num? e1)
-             (optim E2 (dict-set env v e1))
-             (Let v e1 (optim E2 env))))])
+           (optim E2 (dict-set env v e1))
+           (let ([e2 (optim E2 env)])
+             (if (Num? e2)
+                 e2
+                 (Let v e1 e2)))))])
     )
     ;; in
   (optim expr '()))
@@ -192,7 +223,18 @@ Implementation of an AD system for the following (minimal) language:
 ;; Testing
 
 (module+ test
-  
+
+
+
+  (define libTestDeriv
+    (make-immutable-hash
+     `(
+       ;; Arithmetic
+       [f . ,(λ (u) (list (App 'df (list u))))]
+       [g . ,(λ (u) (list (App 'dg (list u))))]
+       [h . ,(λ (u) (list (App 'dh (list u))))]
+       )))
+
   (require plot)
   
   (define g-expr
@@ -201,17 +243,21 @@ Implementation of an AD system for the following (minimal) language:
   (define (g x)
     (eval g-expr (list (cons 'x x)) libMaths))
 
-(define dg-expr
-  (deriv g-expr 'x libDeriv))
+  (define dg-expr
+    (deriv g-expr 'x libDeriv))
   
   (define (dg x)
     (eval dg-expr `((x . ,x)) libMaths))
 
-  (plot
-   (list (axes)
-         (function dg -3 3
-                   #:label "y = dg(x)")))
+  ;; (plot
+  ;;  (list (axes)
+  ;;        (function dg -3 3
+  ;;                  #:label "y = dg(x)")))
   
+  (define g-anf
+    (parse '(let (x1 (mul x x))
+              (let (x2 (div x1 2))
+                (let (x3 (neg x2))
+                  (exp x3))))))
 
-  
   )
